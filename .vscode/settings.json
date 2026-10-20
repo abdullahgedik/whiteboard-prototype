@@ -56,5 +56,5 @@
         "temp/": true,
         "Temp/": true
     },
-    "dotnet.defaultSolution": "jam-training.sln"
+    "dotnet.defaultSolution": "whiteboard-prototype.slnx"
 }
