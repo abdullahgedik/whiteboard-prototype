@@ -133,12 +133,12 @@ namespace Whiteboard.EditorTools
             BottomCenter(deck, DeckBottom);
             RowLayout(deck, DeckPadding, 2f);
 
-            var pen = IconButton("Pen", deck, art.Pen, art, "Pen  (P)");
-            var eraser = IconButton("Eraser", deck, art.Eraser, art, "Eraser  (E)");
-            var bucket = IconButton("Bucket", deck, art.Bucket, art, "Fill  (B)");
+            var pen = IconButton("Pen", deck, art.Pen, art, "Pen  (1)");
+            var eraser = IconButton("Eraser", deck, art.Eraser, art, "Eraser  (2, again to switch mode)");
+            var bucket = IconButton("Bucket", deck, art.Bucket, art, "Fill  (3)");
             Divider(deck);
 
-            var color = IconButton("Color", deck, null, art, "Color  (C)");
+            var color = IconButton("Color", deck, null, art, "Color  (4)");
             var swatch = Img("Swatch", color.transform, art.Circle, Palette.Defaults[0]);
             Center(swatch.rectTransform, 24f, 24f);
             Stretch(Img("Border", swatch.transform, art.Ring, Theme.SwatchBorder).rectTransform);
@@ -146,11 +146,11 @@ namespace Whiteboard.EditorTools
             var (slider, sizeLabel, sizeGroup) = SizeControl(deck, art);
             Divider(deck);
 
-            var undo = IconButton("Undo", deck, art.Undo, art, "Undo  (Ctrl+Z)");
-            var redo = IconButton("Redo", deck, art.Redo, art, "Redo  (Ctrl+Y)");
+            var undo = IconButton("Undo", deck, art.Undo, art, "Undo  (7 or Ctrl+Z)");
+            var redo = IconButton("Redo", deck, art.Redo, art, "Redo  (8 or Ctrl+Y)");
             Divider(deck);
 
-            var gridToggle = IconButton("Grid", deck, art.Grid, art, "Grid  (G)");
+            var gridToggle = IconButton("Grid", deck, art.Grid, art, "Grid  (9)");
             var clear = IconButton("Clear", deck, art.Trash, art, "Clear board");
 
             var eraserBar = Panel("Eraser Modes", canvas, art);
@@ -188,7 +188,7 @@ namespace Whiteboard.EditorTools
             var holder = Rect("Size", parent);
             Preferred(holder, 150f, ButtonSize);
             var group = holder.gameObject.AddComponent<CanvasGroup>();
-            AddTooltip(holder.gameObject, "Brush size  ( [ ]  or mouse wheel )");
+            AddTooltip(holder.gameObject, "Brush size  (5 / 6 or mouse wheel)");
 
             var sliderGo = DefaultControls.CreateSlider(new DefaultControls.Resources
             {

@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using UnityEngine;
-using Object = UnityEngine.Object;
 
 namespace Whiteboard
 {
@@ -11,11 +10,18 @@ namespace Whiteboard
     /// screen position maps directly to a pixel. Alongside the colors, every pixel
     /// remembers which operation drew it on top; the stroke eraser uses that to find
     /// what is under the cursor.
+    /// Removing or reinserting operations (undo, stroke eraser) restores the nearest
+    /// <see cref="CanvasSnapshots">snapshot</see> and redraws only what comes after it.
     /// </summary>
     public sealed class PaintSurface : IDisposable
     {
-        const float MinPointSpacing = 1f;
+        const float MinPointSpacing = 0.5f;
         const byte OwnershipThreshold = 128;
+
+        readonly StrokeSmoother smoother = new StrokeSmoother();
+        readonly List<Vector2> smoothedPoints = new List<Vector2>();
+        readonly CanvasTexture canvasTexture = new CanvasTexture();
+        readonly CanvasSnapshots snapshots = new CanvasSnapshots();
 
         readonly List<CanvasOp> ops = new List<CanvasOp>();
         readonly Stack<HistoryEntry> undoStack = new Stack<HistoryEntry>();
@@ -35,11 +41,19 @@ namespace Whiteboard
         int nextId = 1;
         StrokeOp activeStroke;
         RemoveOpsEntry activeRemoval;
-        bool dirty;
+        // How many operations (from the start of the list) the pixel buffer currently shows;
+        // -1 when it no longer matches any prefix and must be restored from a snapshot.
+        int validCount;
+        // Ops were removed/inserted while in sync: only pixels inside repairRect are stale,
+        // and ops before repairFrom are unaffected.
+        PixelRect repairRect = PixelRect.Empty;
+        int repairFrom = int.MaxValue;
+        // Rasterization writes only inside this rectangle (the whole canvas except during a repair).
+        PixelRect clip;
 
         public int Width { get; private set; }
         public int Height { get; private set; }
-        public Texture2D Texture { get; private set; }
+        public Texture2D Texture => canvasTexture.Texture;
 
         public bool IsBusy => activeStroke != null || activeRemoval != null;
         public bool CanUndo => undoStack.Count > 0 && !IsBusy;
@@ -51,14 +65,10 @@ namespace Whiteboard
         public PaintSurface(int width, int height)
         {
             Allocate(width, height);
-            dirty = true;
+            Sync();
         }
 
-        public void Dispose()
-        {
-            if (Texture != null) Object.Destroy(Texture);
-            Texture = null;
-        }
+        public void Dispose() => canvasTexture.Dispose();
 
         public void Resize(int width, int height)
         {
@@ -66,57 +76,68 @@ namespace Whiteboard
             EndStroke();
             EndObjectErase();
             Allocate(width, height);
-            Replay();
+            Sync();
         }
 
         /// <summary>Pushes pending pixel changes to the GPU. Call once per frame.</summary>
-        public void Upload()
-        {
-            if (!dirty) return;
-            Texture.SetPixelData(pixels, 0);
-            Texture.Apply(false);
-            dirty = false;
-        }
+        public void Upload() => canvasTexture.Upload(pixels);
 
         #region Strokes (pen and area eraser)
 
-        public void BeginStroke(StrokeKind kind, Color32 color, float radius, Vector2 position)
+        /// <param name="smoothing">0 = raw pointer path, up to 0.9 = heavily smoothed.</param>
+        public void BeginStroke(StrokeKind kind, Color32 color, float radius, Vector2 position, float smoothing = 0f)
         {
             EndStroke();
             activeStroke = new StrokeOp(nextId++, kind, color, Mathf.Max(0.5f, radius));
             activeStroke.Points.Add(position);
             StampSegment(activeStroke, position, position);
+            smoother.Begin(position, smoothing);
             HistoryChanged?.Invoke();
         }
 
         public void ExtendStroke(Vector2 position)
         {
             if (activeStroke == null) return;
-            var points = activeStroke.Points;
-            var last = points[points.Count - 1];
-            if ((position - last).sqrMagnitude < MinPointSpacing * MinPointSpacing) return;
-            points.Add(position);
-            StampSegment(activeStroke, last, position);
+            smoother.Add(position, smoothedPoints);
+            AppendSmoothedPoints();
         }
 
         public void EndStroke()
         {
             if (activeStroke == null) return;
+            smoother.Finish(smoothedPoints);
+            AppendSmoothedPoints();
             ResetStrokeScratch();
             var stroke = activeStroke;
             activeStroke = null;
-            ops.Add(stroke);
+            stroke.UpdateBounds();
+            AppendRasterized(stroke);
             Push(new AddOpEntry(stroke));
+        }
+
+        /// <summary>Stores the smoother's output in the stroke (so replay draws the same
+        /// curve) and rasterizes it.</summary>
+        void AppendSmoothedPoints()
+        {
+            var points = activeStroke.Points;
+            foreach (var point in smoothedPoints)
+            {
+                var last = points[points.Count - 1];
+                if ((point - last).sqrMagnitude < MinPointSpacing * MinPointSpacing) continue;
+                points.Add(point);
+                StampSegment(activeStroke, last, point);
+            }
+            smoothedPoints.Clear();
         }
 
         void StampSegment(StrokeOp stroke, Vector2 a, Vector2 b)
         {
             float radius = stroke.Radius;
             float reach = radius + 1f;
-            int minX = Mathf.Max(0, Mathf.FloorToInt(Mathf.Min(a.x, b.x) - reach));
-            int maxX = Mathf.Min(Width - 1, Mathf.CeilToInt(Mathf.Max(a.x, b.x) + reach));
-            int minY = Mathf.Max(0, Mathf.FloorToInt(Mathf.Min(a.y, b.y) - reach));
-            int maxY = Mathf.Min(Height - 1, Mathf.CeilToInt(Mathf.Max(a.y, b.y) + reach));
+            int minX = Mathf.Max(clip.XMin, Mathf.FloorToInt(Mathf.Min(a.x, b.x) - reach));
+            int maxX = Mathf.Min(clip.XMax, Mathf.CeilToInt(Mathf.Max(a.x, b.x) + reach));
+            int minY = Mathf.Max(clip.YMin, Mathf.FloorToInt(Mathf.Min(a.y, b.y) - reach));
+            int maxY = Mathf.Min(clip.YMax, Mathf.CeilToInt(Mathf.Max(a.y, b.y) + reach));
             if (minX > maxX || minY > maxY) return;
 
             float abX = b.x - a.x, abY = b.y - a.y;
@@ -162,7 +183,7 @@ namespace Whiteboard
                     }
                 }
             }
-            dirty = true;
+            canvasTexture.MarkDirty(minX, minY, maxX, maxY);
         }
 
         void ResetStrokeScratch()
@@ -217,9 +238,9 @@ namespace Whiteboard
             {
                 if (!hitIds.Contains(ops[i].Id)) continue;
                 activeRemoval.Add(i, ops[i]);
-                ops.RemoveAt(i);
+                RemoveOpAt(i);
             }
-            Replay();
+            Sync();
         }
 
         public void EndObjectErase()
@@ -296,7 +317,7 @@ namespace Whiteboard
             edgeIndices.Sort();
             var fill = new FillOp(nextId++, color, interior.ToArray(), ToRuns(edgeIndices));
             RasterizeFill(fill);
-            ops.Add(fill);
+            AppendRasterized(fill);
             Push(new AddOpEntry(fill));
             return true;
         }
@@ -342,12 +363,13 @@ namespace Whiteboard
 
         void RasterizeFill(FillOp fill)
         {
+            if (!fill.Bounds.Overlaps(clip)) return;
             foreach (var run in fill.Interior)
             {
-                if (run.Y >= Height || run.X0 >= Width) continue;
+                if (run.Y < clip.YMin || run.Y > clip.YMax) continue;
                 int row = run.Y * Width;
-                int x1 = Mathf.Min(run.X1, Width - 1);
-                for (int x = run.X0; x <= x1; x++)
+                int x1 = Mathf.Min(run.X1, clip.XMax);
+                for (int x = Mathf.Max(run.X0, clip.XMin); x <= x1; x++)
                 {
                     pixels[row + x] = fill.Color;
                     owners[row + x] = fill.Id;
@@ -355,10 +377,10 @@ namespace Whiteboard
             }
             foreach (var run in fill.Edge)
             {
-                if (run.Y >= Height || run.X0 >= Width) continue;
+                if (run.Y < clip.YMin || run.Y > clip.YMax) continue;
                 int row = run.Y * Width;
-                int x1 = Mathf.Min(run.X1, Width - 1);
-                for (int x = run.X0; x <= x1; x++)
+                int x1 = Mathf.Min(run.X1, clip.XMax);
+                for (int x = Mathf.Max(run.X0, clip.XMin); x <= x1; x++)
                 {
                     int i = row + x;
                     var top = pixels[i];
@@ -366,7 +388,11 @@ namespace Whiteboard
                     if (top.a < OwnershipThreshold) owners[i] = fill.Id;
                 }
             }
-            dirty = true;
+            var dirty = fill.Bounds.ClampTo(Width, Height);
+            dirty = new PixelRect(
+                Mathf.Max(dirty.XMin, clip.XMin), Mathf.Max(dirty.YMin, clip.YMin),
+                Mathf.Min(dirty.XMax, clip.XMax), Mathf.Min(dirty.YMax, clip.YMax));
+            if (!dirty.IsEmpty) canvasTexture.MarkDirty(dirty.XMin, dirty.YMin, dirty.XMax, dirty.YMax);
         }
 
         #endregion
@@ -377,9 +403,9 @@ namespace Whiteboard
         {
             if (!CanUndo) return;
             var entry = undoStack.Pop();
-            entry.Undo(ops);
+            entry.Undo(this);
             redoStack.Push(entry);
-            Replay();
+            Sync();
             HistoryChanged?.Invoke();
         }
 
@@ -387,9 +413,9 @@ namespace Whiteboard
         {
             if (!CanRedo) return;
             var entry = redoStack.Pop();
-            entry.Redo(ops);
+            entry.Redo(this);
             undoStack.Push(entry);
-            Replay();
+            Sync();
             HistoryChanged?.Invoke();
         }
 
@@ -397,9 +423,9 @@ namespace Whiteboard
         {
             if (IsBusy || ops.Count == 0) return;
             var entry = new ClearEntry(ops);
-            entry.Redo(ops);
+            entry.Redo(this);
             Push(entry);
-            Replay();
+            Sync();
         }
 
         void Push(HistoryEntry entry)
@@ -411,16 +437,16 @@ namespace Whiteboard
 
         abstract class HistoryEntry
         {
-            public abstract void Undo(List<CanvasOp> ops);
-            public abstract void Redo(List<CanvasOp> ops);
+            public abstract void Undo(PaintSurface surface);
+            public abstract void Redo(PaintSurface surface);
         }
 
         sealed class AddOpEntry : HistoryEntry
         {
             readonly CanvasOp op;
             public AddOpEntry(CanvasOp op) => this.op = op;
-            public override void Undo(List<CanvasOp> ops) => ops.Remove(op);
-            public override void Redo(List<CanvasOp> ops) => ops.Add(op);
+            public override void Undo(PaintSurface surface) => surface.RemoveOpAt(surface.ops.LastIndexOf(op));
+            public override void Redo(PaintSurface surface) => surface.AppendOp(op);
         }
 
         sealed class RemoveOpsEntry : HistoryEntry
@@ -430,29 +456,133 @@ namespace Whiteboard
             public int Count => removed.Count;
             public void Add(int index, CanvasOp op) => removed.Add((index, op));
 
-            public override void Undo(List<CanvasOp> ops)
+            public override void Undo(PaintSurface surface)
             {
-                for (int k = removed.Count - 1; k >= 0; k--) ops.Insert(removed[k].index, removed[k].op);
+                for (int k = removed.Count - 1; k >= 0; k--) surface.InsertOp(removed[k].index, removed[k].op);
             }
 
-            public override void Redo(List<CanvasOp> ops)
+            public override void Redo(PaintSurface surface)
             {
-                foreach (var (index, _) in removed) ops.RemoveAt(index);
+                foreach (var (index, _) in removed) surface.RemoveOpAt(index);
             }
         }
 
         sealed class ClearEntry : HistoryEntry
         {
-            readonly List<CanvasOp> snapshot;
-            public ClearEntry(List<CanvasOp> ops) => snapshot = new List<CanvasOp>(ops);
+            readonly List<CanvasOp> cleared;
+            public ClearEntry(List<CanvasOp> ops) => cleared = new List<CanvasOp>(ops);
 
-            public override void Undo(List<CanvasOp> ops)
+            public override void Undo(PaintSurface surface)
             {
-                ops.Clear();
-                ops.AddRange(snapshot);
+                surface.ClearOps();
+                foreach (var op in cleared) surface.AppendOp(op);
             }
 
-            public override void Redo(List<CanvasOp> ops) => ops.Clear();
+            public override void Redo(PaintSurface surface) => surface.ClearOps();
+        }
+
+        #endregion
+
+        #region Operation list
+
+        // All changes to the operation list go through these, so snapshots and the pixel
+        // buffer know which part of the history is still intact. Call Sync() afterwards.
+
+        /// <summary>Appends an operation that has already been drawn onto the pixel buffer.</summary>
+        void AppendRasterized(CanvasOp op)
+        {
+            bool inSync = validCount == ops.Count;
+            ops.Add(op);
+            if (!inSync)
+            {
+                validCount = -1;
+                return;
+            }
+            validCount = ops.Count;
+            snapshots.Offer(validCount, pixels, owners);
+        }
+
+        /// <summary>Appends an operation to be drawn by the next Sync(); nothing earlier changes.</summary>
+        void AppendOp(CanvasOp op) => ops.Add(op);
+
+        void InsertOp(int index, CanvasOp op)
+        {
+            bool inSync = BeginEdit(index, op);
+            ops.Insert(index, op);
+            if (inSync) validCount++;
+        }
+
+        void RemoveOpAt(int index)
+        {
+            var op = ops[index];
+            bool inSync = BeginEdit(index, op);
+            ops.RemoveAt(index);
+            if (inSync) validCount--;
+        }
+
+        void ClearOps()
+        {
+            snapshots.InvalidateFrom(0);
+            ops.Clear();
+            validCount = -1;
+            repairRect = PixelRect.Empty;
+            repairFrom = int.MaxValue;
+        }
+
+        /// <summary>Prepares for inserting/removing <paramref name="op"/> at <paramref name="index"/>.
+        /// Returns true when the buffer stays usable and only the op's bounds need a repair.</summary>
+        bool BeginEdit(int index, CanvasOp op)
+        {
+            snapshots.InvalidateFrom(index);
+            if (validCount <= index) return false; // the change is beyond what the buffer shows
+            if (validCount != ops.Count)
+            {
+                validCount = -1;
+                return false;
+            }
+            repairRect = repairRect.Union(op.Bounds);
+            repairFrom = Mathf.Min(repairFrom, index);
+            return true;
+        }
+
+        /// <summary>Brings the pixel buffer up to date with the operation list: a full restore from
+        /// the newest snapshot when the buffer is invalid, a repair of just the stale rectangle
+        /// after removals/insertions, then drawing any operations appended at the end.</summary>
+        void Sync()
+        {
+            if (validCount < 0 || validCount > ops.Count)
+            {
+                validCount = snapshots.Restore(ops.Count, pixels, owners);
+                canvasTexture.MarkAllDirty();
+            }
+            else if (!repairRect.IsEmpty)
+            {
+                RepairRegion(repairRect.ClampTo(Width, Height), Mathf.Min(repairFrom, validCount));
+            }
+            repairRect = PixelRect.Empty;
+            repairFrom = int.MaxValue;
+
+            while (validCount < ops.Count)
+            {
+                Rasterize(ops[validCount]);
+                validCount++;
+                snapshots.Offer(validCount, pixels, owners);
+            }
+            snapshots.Offer(validCount, pixels, owners);
+        }
+
+        /// <summary>Redraws one rectangle: restore it from the newest snapshot that predates the
+        /// edit, then draw only the operations that overlap it, clipped to it. Exact because every
+        /// operation is a per-pixel function of the pixels below it.</summary>
+        void RepairRegion(PixelRect rect, int editIndex)
+        {
+            if (rect.IsEmpty) return;
+            int from = snapshots.RestoreRegion(editIndex, rect, Width, pixels, owners);
+            clip = rect;
+            for (int i = from; i < validCount; i++)
+                if (ops[i].Bounds.Overlaps(rect)) Rasterize(ops[i]);
+            clip = new PixelRect(0, 0, Width - 1, Height - 1);
+            canvasTexture.MarkDirty(rect.XMin, rect.YMin, rect.XMax, rect.YMax);
         }
 
         #endregion
@@ -471,36 +601,28 @@ namespace Whiteboard
             regionMask = new byte[length];
             touched.Clear();
 
-            if (Texture != null) Object.Destroy(Texture);
-            Texture = new Texture2D(Width, Height, TextureFormat.RGBA32, false)
-            {
-                name = "Whiteboard Canvas",
-                filterMode = FilterMode.Point,
-                wrapMode = TextureWrapMode.Clamp
-            };
-            dirty = true;
+            canvasTexture.Resize(Width, Height);
+            snapshots.Configure(length);
+            validCount = -1;
+            repairRect = PixelRect.Empty;
+            repairFrom = int.MaxValue;
+            clip = new PixelRect(0, 0, Width - 1, Height - 1);
         }
 
-        void Replay()
+        void Rasterize(CanvasOp op)
         {
-            Array.Clear(pixels, 0, pixels.Length);
-            Array.Clear(owners, 0, owners.Length);
-            foreach (var op in ops)
+            switch (op)
             {
-                switch (op)
-                {
-                    case StrokeOp stroke:
-                        var points = stroke.Points;
-                        StampSegment(stroke, points[0], points[0]);
-                        for (int i = 1; i < points.Count; i++) StampSegment(stroke, points[i - 1], points[i]);
-                        ResetStrokeScratch();
-                        break;
-                    case FillOp fill:
-                        RasterizeFill(fill);
-                        break;
-                }
+                case StrokeOp stroke:
+                    var points = stroke.Points;
+                    StampSegment(stroke, points[0], points[0]);
+                    for (int i = 1; i < points.Count; i++) StampSegment(stroke, points[i - 1], points[i]);
+                    ResetStrokeScratch();
+                    break;
+                case FillOp fill:
+                    RasterizeFill(fill);
+                    break;
             }
-            dirty = true;
         }
 
         /// <summary>Straight-alpha "source over destination" with source opacity scaled by coverage.</summary>

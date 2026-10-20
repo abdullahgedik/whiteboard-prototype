@@ -21,6 +21,8 @@ namespace Whiteboard
         [Header("Pen")]
         [SerializeField] float penSize = 4f;
         [SerializeField] Vector2 penSizeRange = new Vector2(1f, 64f);
+        [Tooltip("Filters hand jitter. 0 follows the pointer exactly; higher values are smoother but trail the cursor more.")]
+        [SerializeField, Range(0f, 0.9f)] float strokeSmoothing = 0.35f;
 
         [Header("Eraser")]
         [SerializeField] float eraserSize = 24f;
@@ -139,11 +141,11 @@ namespace Whiteboard
             switch (tool)
             {
                 case BoardTool.Pen:
-                    surface.BeginStroke(StrokeKind.Paint, color.Current, penSize * 0.5f, position);
+                    surface.BeginStroke(StrokeKind.Paint, color.Current, penSize * 0.5f, position, strokeSmoothing);
                     pointerActive = true;
                     break;
                 case BoardTool.Eraser when eraserMode == EraserMode.Area:
-                    surface.BeginStroke(StrokeKind.Erase, default, eraserSize * 0.5f, position);
+                    surface.BeginStroke(StrokeKind.Erase, default, eraserSize * 0.5f, position, strokeSmoothing);
                     pointerActive = true;
                     break;
                 case BoardTool.Eraser:
@@ -192,17 +194,32 @@ namespace Whiteboard
                 return;
             }
 
-            if (Input.GetKeyDown(KeyCode.P)) OnToolClicked(BoardTool.Pen);
-            if (Input.GetKeyDown(KeyCode.E)) OnToolClicked(BoardTool.Eraser);
-            if (Input.GetKeyDown(KeyCode.B)) OnToolClicked(BoardTool.Bucket);
-            if (Input.GetKeyDown(KeyCode.G)) SetGrid(!gridVisible);
-            if (Input.GetKeyDown(KeyCode.C)) SetColorPanelOpen(!colorPanel.IsOpen);
+            for (int digit = 1; digit <= 9; digit++)
+            {
+                if (Input.GetKeyDown(KeyCode.Alpha0 + digit) || Input.GetKeyDown(KeyCode.Keypad0 + digit))
+                    RunNumberShortcut(digit);
+            }
             if (Input.GetKeyDown(KeyCode.Escape)) SetColorPanelOpen(false);
-            if (Input.GetKeyDown(KeyCode.LeftBracket)) StepSize(-1);
-            if (Input.GetKeyDown(KeyCode.RightBracket)) StepSize(1);
 
             float scroll = Input.mouseScrollDelta.y;
             if (!overUI && Mathf.Abs(scroll) > 0.01f) StepSize(scroll > 0f ? 1 : -1);
+        }
+
+        /// <summary>Number keys follow the tool deck from left to right. Clear has no key on purpose.</summary>
+        void RunNumberShortcut(int digit)
+        {
+            switch (digit)
+            {
+                case 1: OnToolClicked(BoardTool.Pen); break;
+                case 2: OnToolClicked(BoardTool.Eraser); break;
+                case 3: OnToolClicked(BoardTool.Bucket); break;
+                case 4: SetColorPanelOpen(!colorPanel.IsOpen); break;
+                case 5: StepSize(-1); break;
+                case 6: StepSize(1); break;
+                case 7: surface.Undo(); break;
+                case 8: surface.Redo(); break;
+                case 9: SetGrid(!gridVisible); break;
+            }
         }
 
         #endregion

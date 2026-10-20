@@ -2953,7 +2953,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 6be10a7bdb6841245a89c7879ee5834c, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::Whiteboard.TooltipTrigger
-  text: Color  (C)
+  text: Color  (4)
 --- !u!114 &947011287
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -3127,7 +3127,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 6be10a7bdb6841245a89c7879ee5834c, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::Whiteboard.TooltipTrigger
-  text: Eraser  (E)
+  text: Eraser  (2, again to switch mode)
 --- !u!114 &956697232
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -4090,7 +4090,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 6be10a7bdb6841245a89c7879ee5834c, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::Whiteboard.TooltipTrigger
-  text: Grid  (G)
+  text: Grid  (9)
 --- !u!114 &1194970179
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -4863,7 +4863,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 6be10a7bdb6841245a89c7879ee5834c, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::Whiteboard.TooltipTrigger
-  text: Brush size  ( [ ]  or mouse wheel )
+  text: Brush size  (5 / 6 or mouse wheel)
 --- !u!225 &1439942451
 CanvasGroup:
   m_ObjectHideFlags: 0
@@ -5314,7 +5314,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 6be10a7bdb6841245a89c7879ee5834c, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::Whiteboard.TooltipTrigger
-  text: Fill  (B)
+  text: Fill  (3)
 --- !u!114 &1570338002
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -5785,7 +5785,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 6be10a7bdb6841245a89c7879ee5834c, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::Whiteboard.TooltipTrigger
-  text: Redo  (Ctrl+Y)
+  text: Redo  (8 or Ctrl+Y)
 --- !u!114 &1681315756
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -7058,7 +7058,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 6be10a7bdb6841245a89c7879ee5834c, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::Whiteboard.TooltipTrigger
-  text: Pen  (P)
+  text: Pen  (1)
 --- !u!114 &2039246483
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -7232,7 +7232,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 6be10a7bdb6841245a89c7879ee5834c, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::Whiteboard.TooltipTrigger
-  text: Undo  (Ctrl+Z)
+  text: Undo  (7 or Ctrl+Z)
 --- !u!114 &2051697073
 MonoBehaviour:
   m_ObjectHideFlags: 0
